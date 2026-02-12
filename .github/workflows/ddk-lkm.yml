@@ -1,4 +1,4 @@
-name: Build KernelSU LKM for OPPO K10x (Holi Config Fix)
+name: Build KernelSU LKM for OPPO K10x (Final Success)
 
 on:
   workflow_dispatch:
@@ -14,24 +14,32 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev \
-            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi git
 
-      - name: Setup AOSP Clang 12
+      - name: Setup Clang 12 (Git Clone Method)
         run: |
-          mkdir -p clang
-          cd clang
-          wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r416183b.tar.gz
-          tar -zxf clang-r416183b.tar.gz
-          echo "CLANG_PATH=$(pwd)" >> $GITHUB_ENV
+          echo "Cloning Clang from Google Source (Tag: android-12.1.0_r27)..."
+          # 使用 git clone 代替 wget，解决 400 错误
+          # 我们只拉取最近一次提交，且指定包含了目标 Clang 的 Tag
+          git clone https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 --depth=1 -b android-12.1.0_r27 clang-repo
+          
+          # 将目标版本的 Clang 移动出来
+          mv clang-repo/clang-r416183b clang
+          rm -rf clang-repo
+          
+          # 验证版本
+          ./clang/bin/clang --version
+          echo "CLANG_PATH=$(pwd)/clang" >> $GITHUB_ENV
 
       - name: Build KernelSU LKM
         run: |
-          # 1. 克隆源码
+          # 1. 克隆内核源码
           git clone --depth=1 -b oppo/sm6375_u_14.0.0_k10x_5g https://github.com/oppo-source/android_kernel_oppo_sm6375.git kernel-source
           cd kernel-source
 
-          # 2. 源码修复 (核弹级修复脚本)
+          # 2. 源码环境修复 (核弹级修复脚本)
           echo "Repairing Source Tree..."
+          # 转换换行符
           find . -type f \( -name "Kconfig*" -o -name "Makefile" -o -name "*.mk" \) -exec sed -i 's/\r$//' {} +
           
           # 修复 Kconfig 引用 (避开 configs 目录)
@@ -40,20 +48,23 @@ jobs:
                   target_path="$line"
                   [[ "$line" == .* ]] && target_path="$(dirname $kfile)/$line"
                   if [ ! -f "$target_path" ]; then
+                      # echo "Removing broken ref: $line in $kfile" # 减少日志输出
                       sed -i "\|source \"$line\"|d" "$kfile"
                   fi
               done
           done
           
+          # 清理失效软链接
           find . -type l ! -exec test -e {} \; -delete
+          # 屏蔽 techpack
           sed -i 's/obj-y += techpack\///g' Makefile 2>/dev/null || true
 
           # 3. 集成 KernelSU
           echo "Setting up KernelSU..."
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
           
-          # 4. 关键修正：手动拼接生成 defconfig
-          echo "Generating Defconfig for Holi (SM6375)..."
+          # 4. 生成配置文件 (Defconfig)
+          echo "Generating Defconfig..."
           export PATH=${{ env.CLANG_PATH }}/bin:$PATH
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
@@ -61,24 +72,25 @@ jobs:
           export CC=clang
           export CLANG_TRIPLE=aarch64-linux-gnu-
 
-          # 既然没有 sm6375_defconfig，我们把 gki_defconfig 和 vendor/holi_GKI.config 拼起来
-          # 这是一个非常稳的操作，保证基础功能和硬件驱动都有
-          cat arch/arm64/configs/gki_defconfig arch/arm64/configs/vendor/holi_GKI.config > arch/arm64/configs/k10x_full_defconfig
+          # 拼接 GKI 基础配置 + Holi (SM6375) 厂商配置
+          # 你的文件列表证明这两个文件存在，这是最正确的做法
+          cat arch/arm64/configs/gki_defconfig arch/arm64/configs/vendor/holi_GKI.config > arch/arm64/configs/k10x_defconfig
 
-          # 使用拼接好的文件生成配置
-          make k10x_full_defconfig
+          # 生成初始 .config
+          make k10x_defconfig
           
-          # 5. 注入 KernelSU 选项
+          # 5. 注入 KernelSU 选项并更新配置
           echo "CONFIG_KSU_LKM=y" >> .config
           echo "CONFIG_MODULES=y" >> .config
           echo "CONFIG_MODULE_SIG=n" >> .config
           echo "CONFIG_UNUSED_SYMBOLS=y" >> .config
           
-          # 更新配置
+          # 让内核处理配置依赖
           make olddefconfig
 
           # 6. 编译
-          echo "Compiling..."
+          echo "Starting Compilation..."
+          # 准备模块编译环境 (这一步会生成 bounds.s，如果有 GCC 32位支持通常能过)
           make modules_prepare -j$(nproc)
           
           # 编译 KernelSU 模块
@@ -86,7 +98,7 @@ jobs:
 
           # 7. 检查产物
           if [ -f "drivers/kernelsu/kernelsu.ko" ]; then
-              echo "SUCCESS: kernelsu.ko built!"
+              echo "SUCCESS: kernelsu.ko built successfully!"
               cp drivers/kernelsu/kernelsu.ko ../
           else
               echo "ERROR: kernelsu.ko not found!"
