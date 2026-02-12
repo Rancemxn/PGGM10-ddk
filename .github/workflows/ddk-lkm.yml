@@ -35,81 +35,54 @@ jobs:
           git clone --depth=1 -b oppo/sm6375_u_14.0.0_k10x_5g https://github.com/oppo-source/android_kernel_oppo_sm6375.git kernel-source
           cd kernel-source
 
-          # 2. 源码深度修复
+          # 2. 源码环境修复 (包含 Kconfig 修复和 sched_assist 修复)
           echo "Repairing Source Tree..."
-          
-          # A. 处理换行符
           find . -type f \( -name "Kconfig*" -o -name "Makefile" -o -name "*.mk" \) -exec sed -i 's/\r$//' {} +
-          
-          # B. 针对性修复：直接删除 kernel/sched_assist 的引用 (报错的元凶)
-          # 使用 sed 直接在 init/Kconfig 中删除这一行，不给它报错的机会
           sed -i '/kernel\/sched_assist\/Kconfig/d' init/Kconfig
-          
-          # C. 通用修复逻辑：删除所有不存在的 Kconfig 引用 (防止 grep 崩溃版)
-          # 使用 || true 确保即使没找到引用，脚本也会继续执行
-          find . -name "Kconfig*" | while read -r kfile; do
-              # 只有当文件确实包含 source 关键字时才处理
-              if grep -q "source " "$kfile"; then
-                  # 提取路径并检查
-                  lines=$(grep -oP 'source "\K[^"]+' "$kfile" || true)
-                  for line in $lines; do
-                      # 检查路径是否存在 (考虑相对路径)
-                      if [[ "$line" == /* ]]; then target_path=".$line"; 
-                      elif [[ "$line" == .* ]]; then target_path="$(dirname "$kfile")/$line"; 
-                      else target_path="$line"; fi
-                      
-                      if [ ! -f "$target_path" ]; then
-                          # 使用 @ 作为定界符，避免路径中的 / 冲突
-                          sed -i "\|source \"$line\"|d" "$kfile"
-                      fi
-                  done
-              fi
-          done
-
-          # D. 屏蔽 techpack 和清理软链接
           sed -i 's/obj-y += techpack\///g' Makefile 2>/dev/null || true
-          find . -type l ! -exec test -e {} \; -delete
-
+          
           # 3. 集成 KernelSU
           echo "Setting up KernelSU..."
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
           
-          # 4. 定义编译参数
+          # 4. 定义编译变量
           export PATH=${{ env.CLANG_PATH }}/bin:$PATH
-          ARGS="ARCH=arm64 \
+          
+          # 简化参数：针对 4.19/5.4/5.10 内核最稳妥的组合
+          MAKE_ARGS="ARCH=arm64 \
           SUBARCH=arm64 \
           CC=clang \
-          LD=ld.lld \
-          AR=llvm-ar \
-          NM=llvm-nm \
-          OBJCOPY=llvm-objcopy \
-          OBJDUMP=llvm-objdump \
-          STRIP=llvm-strip \
           CROSS_COMPILE=aarch64-linux-gnu- \
           CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
           CLANG_TRIPLE=aarch64-linux-gnu- \
-          LLVM=1 \
-          LLVM_IAS=1"
+          LD=ld.lld"
 
-          # 5. 生成配置
-          echo "Generating Defconfig..."
-          cat arch/arm64/configs/gki_defconfig arch/arm64/configs/vendor/holi_GKI.config > arch/arm64/configs/k10x_defconfig
-          make $ARGS k10x_defconfig
-          
-          # 注入 KernelSU 配置
+          # 5. 生成配置文件 (使用 merge_config.sh)
+          echo "Merging Defconfigs..."
+          # 使用内核自带工具合并 GKI 配置和 Holi 厂商配置
+          ARCH=arm64 ./scripts/kconfig/merge_config.sh -m -O . \
+            arch/arm64/configs/gki_defconfig \
+            arch/arm64/configs/vendor/holi_GKI.config
+
+          # 强制在 .config 中开启 64 位和模块支持，防止被误判为 32 位
+          echo "CONFIG_64BIT=y" >> .config
           echo "CONFIG_KSU_LKM=y" >> .config
           echo "CONFIG_MODULES=y" >> .config
           echo "CONFIG_MODULE_SIG=n" >> .config
           echo "CONFIG_UNUSED_SYMBOLS=y" >> .config
           
-          make $ARGS olddefconfig
+          # 应用并检查配置
+          make $MAKE_ARGS olddefconfig
 
-          # 6. 编译模块
-          echo "Starting Build..."
-          make $ARGS prepare -j$(nproc)
-          make $ARGS M=drivers/kernelsu -j$(nproc)
+          # 6. 开始编译
+          echo "Starting Compilation..."
+          # 必须先执行 prepare 且带上所有 ARGS
+          make $MAKE_ARGS prepare -j$(nproc)
+          
+          # 编译 KernelSU 模块
+          make $MAKE_ARGS M=drivers/kernelsu -j$(nproc)
 
-          # 7. 检查产物
+          # 7. 检查
           if [ -f "drivers/kernelsu/kernelsu.ko" ]; then
               echo "SUCCESS!"
               cp drivers/kernelsu/kernelsu.ko ../
