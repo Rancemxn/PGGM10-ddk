@@ -20,17 +20,36 @@ jobs:
           # 依然克隆你找的这个分支
           git clone --depth=1 -b oppo/sm6375_u_14.0.0_k10x_5g https://github.com/oppo-source/android_kernel_oppo_sm6375.git kernel-source
 
-      - name: Repair Kernel Source (Fix Oplus Missing Files)
+      - name: Repair Kernel Source (Robust Auto-Fix)
         run: |
           cd kernel-source
-          # 关键操作：强行删除 Kconfig 中缺失目录的引用
-          # 修复 sched_assist 报错
-          sed -i '/kernel\/sched_assist\/Kconfig/d' init/Kconfig
-          # 预防性修复：有些欧加源码还缺 techpack 或其他目录，如果报错可以继续添加
-          sed -i '/techpack/d' Makefile
-          sed -i '/techpack/d' arch/arm64/Kconfig
           
-          echo "Source tree repaired."
+          # 1. 修复 Kconfig 引用
+          # 扫描 init/Kconfig 和 arch/arm64/Kconfig，把 source 指向的不存在文件全部删掉
+          echo "Auto-fixing Kconfig files..."
+          for kfile in init/Kconfig arch/arm64/Kconfig; do
+              if [ -f "$kfile" ]; then
+                  # 提取 source "xxx" 中的路径并检查
+                  grep -oP 'source "\K[^"]+' "$kfile" | while read -r line; do
+                      if [ ! -f "$line" ]; then
+                          echo "  -> Removing broken reference: $line in $kfile"
+                          # 使用 | 作为 sed 分隔符，防止路径中的 / 导致报错
+                          sed -i "\|source \"$line\"|d" "$kfile"
+                      fi
+                  done
+              fi
+          done
+
+          # 2. 清理失效的软链接 (Symlinks)
+          # 你截图看到的 kernel/sched_assist 就是这种，它指向 vendor 目录但代码没给
+          echo "Cleaning broken symlinks..."
+          find . -type l ! -exec test -e {} \; -print -delete
+
+          # 3. 屏蔽 Makefile 里的 techpack (欧加源码的常客报错)
+          # 如果 Makefile 里包含编译不存在的 techpack 目录，会导致编译中断
+          sed -i 's/obj-y += techpack\///g' Makefile 2>/dev/null || true
+          
+          echo "Repair complete."
 
       - name: Setup KernelSU
         run: |
