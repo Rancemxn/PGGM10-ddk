@@ -1,6 +1,8 @@
 name: Build KernelSU LKM for OPPO K10x (Tutorial Optimized)
 
 on:
+  push:
+    
   workflow_dispatch:
 
 jobs:
