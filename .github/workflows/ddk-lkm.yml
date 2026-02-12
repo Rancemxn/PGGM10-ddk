@@ -64,7 +64,7 @@ jobs:
           export CLANG_TRIPLE=aarch64-linux-gnu-
           
           # 生成 .config
-          make arch/arm64/configs/defconfig
+          make vendor/sm6375_defconfig
           
           # 检查 .config 是否真的生成了，如果没有直接报错退出
           if [ ! -f ".config" ]; then
