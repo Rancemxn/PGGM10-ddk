@@ -1,4 +1,4 @@
-name: Build KernelSU LKM for OPPO K10x (Final Success)
+name: Build KernelSU LKM for OPPO K10x (Tutorial Optimized)
 
 on:
   workflow_dispatch:
@@ -13,96 +13,83 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev \
-            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi git lld llvm
+          # 按照教程补全所有依赖，特别是 multilib 系列
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib \
+            gcc-multilib git git-lfs gnupg gperf lib32ncurses5-dev lib32readline-dev \
+            lib32z1-dev libelf-dev liblz4-tool libncurses5 libncurses5-dev \
+            libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync \
+            schedtool squashfs-tools xsltproc zip zlib1g-dev gcc-aarch64-linux-gnu
 
-      - name: Setup Clang 12 (Git Clone Method)
+      - name: Setup Clang 12 (Stable Version)
         run: |
-          echo "Cloning Clang from Google Source..."
+          echo "Cloning Clang 12..."
           git clone https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 --depth=1 -b android-12.1.0_r27 clang-repo
           mv clang-repo/clang-r416183b clang
           rm -rf clang-repo
           echo "CLANG_PATH=$(pwd)/clang" >> $GITHUB_ENV
-          # 验证 Clang
-          ./clang/bin/clang --version
 
       - name: Build KernelSU LKM
         run: |
-          # 1. 克隆内核源码
+          # 1. 克隆源码
           git clone --depth=1 -b oppo/sm6375_u_14.0.0_k10x_5g https://github.com/oppo-source/android_kernel_oppo_sm6375.git kernel-source
           cd kernel-source
 
-          # 2. 源码环境修复
+          # 2. 源码修复 (OPPO 特色修复)
           echo "Repairing Source Tree..."
           find . -type f \( -name "Kconfig*" -o -name "Makefile" -o -name "*.mk" \) -exec sed -i 's/\r$//' {} +
-          
-          find . -name "Kconfig*" -not -path "./arch/arm64/configs/*" | while read -r kfile; do
-              grep -oP 'source "\K[^"]+' "$kfile" | while read -r line; do
-                  target_path="$line"
-                  [[ "$line" == .* ]] && target_path="$(dirname $kfile)/$line"
-                  if [ ! -f "$target_path" ]; then
-                      sed -i "\|source \"$line\"|d" "$kfile"
-                  fi
-              done
-          done
-          
-          find . -type l ! -exec test -e {} \; -delete
           sed -i 's/obj-y += techpack\///g' Makefile 2>/dev/null || true
 
           # 3. 集成 KernelSU
           echo "Setting up KernelSU..."
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
           
-          # 4. 定义编译参数 (核心修复：确保所有 make 过程都带上这些参数)
-          CLANG_BIN=${{ env.CLANG_PATH }}/bin
-          export PATH=$CLANG_BIN:$PATH
+          # 4. 设置编译参数 (参考教程 build.sh 逻辑)
+          export PATH=${{ env.CLANG_PATH }}/bin:$PATH
           
-          MAKE_FLAGS=(
-              ARCH=arm64
-              CROSS_COMPILE=aarch64-linux-gnu-
-              CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-              CC=clang
-              LD=ld.lld
-              AR=llvm-ar
-              NM=llvm-nm
-              OBJCOPY=llvm-objcopy
-              OBJDUMP=llvm-objdump
-              STRIP=llvm-strip
-              CLANG_TRIPLE=aarch64-linux-gnu-
-          )
+          # 教程建议的参数组合
+          ARGS="ARCH=arm64 \
+          SUBARCH=arm64 \
+          CC=clang \
+          CROSS_COMPILE=aarch64-linux-gnu- \
+          CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+          CLANG_TRIPLE=aarch64-linux-gnu- \
+          LLVM=1 \
+          LLVM_IAS=1"
 
-          # 5. 生成配置文件
+          # 5. 生成配置
           echo "Generating Defconfig..."
-          # 拼接配置
+          # 拼接 GKI 和 厂商配置
           cat arch/arm64/configs/gki_defconfig arch/arm64/configs/vendor/holi_GKI.config > arch/arm64/configs/k10x_defconfig
-
-          # 使用定义的变量执行 make
-          make "${MAKE_FLAGS[@]}" k10x_defconfig
           
-          # 注入 KernelSU 配置到 .config
+          # 第一次构建配置
+          make $ARGS k10x_defconfig
+          
+          # 注入 KernelSU LKM 配置
           echo "CONFIG_KSU_LKM=y" >> .config
           echo "CONFIG_MODULES=y" >> .config
           echo "CONFIG_MODULE_SIG=n" >> .config
           echo "CONFIG_UNUSED_SYMBOLS=y" >> .config
           
-          # 让内核处理配置依赖
-          make "${MAKE_FLAGS[@]}" olddefconfig
+          # 处理依赖
+          make $ARGS olddefconfig
 
-          # 6. 编译
-          echo "Starting Compilation..."
-          # 这一步生成 bounds.s, 必须带上参数防止 atomic64 报错
-          make "${MAKE_FLAGS[@]}" modules_prepare -j$(nproc)
+          # 6. 执行编译 (教程建议分步执行)
+          echo "Preparing Kernel for LKM..."
+          # 先准备环境，不使用 -j 防止报错被淹没
+          make $ARGS prepare
           
-          # 编译 KernelSU 模块
-          # 注意：有些内核需要先编译一次基本内核对象，这里先直接尝试编译模块
-          make "${MAKE_FLAGS[@]}" M=drivers/kernelsu -j$(nproc)
+          echo "Compiling KernelSU Module..."
+          # 正式多线程编译模块
+          make $ARGS M=drivers/kernelsu -j$(nproc)
 
-          # 7. 检查产物
+          # 7. 产物检查
           if [ -f "drivers/kernelsu/kernelsu.ko" ]; then
-              echo "SUCCESS: kernelsu.ko built successfully!"
+              echo "SUCCESS!"
               cp drivers/kernelsu/kernelsu.ko ../
           else
-              echo "ERROR: kernelsu.ko not found!"
+              echo "FAILED: kernelsu.ko not found!"
+              # 打印最后 100 行日志辅助分析
+              tail -n 100 ../kernel_log.log || true
               exit 1
           fi
 
