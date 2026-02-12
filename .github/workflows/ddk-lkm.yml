@@ -1,4 +1,4 @@
-name: Build KernelSU LKM for OPPO K10x (Final Boss Fix)
+name: Build KernelSU LKM for OPPO K10x (Absolute Final)
 
 on:
   workflow_dispatch:
@@ -21,26 +21,22 @@ jobs:
           git clone --depth=1 -b oppo/sm6375_u_14.0.0_k10x_5g https://github.com/oppo-source/android_kernel_oppo_sm6375.git kernel-source
           cd kernel-source
 
-          # 2. 核弹级源码修复 (针对欧加套娃源码)
+          # 2. 源码修复 (避开 configs 目录，防止误删配置文件)
           echo "Repairing Source Tree..."
-          # 转换换行符
           find . -type f \( -name "Kconfig*" -o -name "Makefile" -o -name "*.mk" \) -exec sed -i 's/\r$//' {} +
-          # 递归删除不存在的 Kconfig 引用
-          find . -name "Kconfig*" | while read -r kfile; do
+          
+          # 仅在非 configs 目录下修复 Kconfig 引用
+          find . -name "Kconfig*" -not -path "./arch/arm64/configs/*" | while read -r kfile; do
               grep -oP 'source "\K[^"]+' "$kfile" | while read -r line; do
-                  # 这里的逻辑：如果路径里有 ../，则相对于当前 Kconfig 所在目录查找
                   target_path="$line"
-                  if [[ "$line" == .* ]]; then
-                      target_path="$(dirname $kfile)/$line"
-                  fi
+                  [[ "$line" == .* ]] && target_path="$(dirname $kfile)/$line"
                   if [ ! -f "$target_path" ]; then
                       echo "  -> Removing broken reference: $line in $kfile"
                       sed -i "\|source \"$line\"|d" "$kfile"
                   fi
               done
           done
-          # 清理失效软链接
-          find . -type l ! -exec test -e {} \; -delete
+          
           # 屏蔽 techpack
           sed -i 's/obj-y += techpack\///g' Makefile 2>/dev/null || true
 
@@ -48,43 +44,41 @@ jobs:
           echo "Setting up KernelSU..."
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
           
-          # 4. 注入配置到正确的 Defconfig (核心修正)
-          # 既然你执行 make vendor/sm6375_defconfig，我们就改这个文件
-          TARGET_CONFIG="arch/arm64/configs/defconfig"
-          echo "CONFIG_KSU_LKM=y" >> $TARGET_CONFIG
-          echo "CONFIG_MODULES=y" >> $TARGET_CONFIG
-          echo "CONFIG_MODULE_SIG=n" >> $TARGET_CONFIG
-          echo "CONFIG_UNUSED_SYMBOLS=y" >> $TARGET_CONFIG # 增加兼容性
-
-          # 5. 开始正式编译
+          # 4. 强制指定并注入配置 (核心：直接操作生成的 .config)
           echo "Starting Build Process..."
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
           export CC=clang
           export CLANG_TRIPLE=aarch64-linux-gnu-
-          
-          # 生成 .config
-          make vendor/sm6375_defconfig
-          
-          # 检查 .config 是否真的生成了，如果没有直接报错退出
-          if [ ! -f ".config" ]; then
-              echo "FATAL: .config was not generated! Defconfig step failed."
-              exit 1
-          fi
 
-          # 准备编译环境
+          # 找到真正的配置文件并生成 .config
+          # 我们直接把那个 vendor 下的文件拷贝到根目录执行，避免路径问题
+          cp arch/arm64/configs/defconfig arch/arm64/configs/k10x_temp_defconfig
+          make k10x_temp_defconfig
+          
+          # 5. 注入 KernelSU LKM 选项到生成的 .config
+          echo "Injecting KSU configs..."
+          echo "CONFIG_KSU_LKM=y" >> .config
+          echo "CONFIG_MODULES=y" >> .config
+          echo "CONFIG_MODULE_SIG=n" >> .config
+          echo "CONFIG_UNUSED_SYMBOLS=y" >> .config
+          
+          # 应用配置更新
+          make olddefconfig
+
+          # 6. 准备环境并编译
           make modules_prepare -j$(nproc)
           
-          # 仅编译 KernelSU 模块
-          # 注意：KSU 源码被 setup.sh 放在了 drivers/kernelsu
+          echo "Compiling KernelSU LKM..."
+          # 针对 LKM 模式的特殊编译指令
           make M=drivers/kernelsu -j$(nproc)
 
-          # 6. 检查并准备产物
+          # 7. 检查产物
           if [ -f "drivers/kernelsu/kernelsu.ko" ]; then
               echo "SUCCESS: kernelsu.ko built!"
               cp drivers/kernelsu/kernelsu.ko ../
           else
-              echo "ERROR: kernelsu.ko not found in drivers/kernelsu/"
+              echo "ERROR: kernelsu.ko not found. Searching..."
               find drivers -name "*.ko"
               exit 1
           fi
