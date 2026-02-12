@@ -57,8 +57,6 @@ jobs:
           cd kernel-source
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
           
-          # 确保开启模块支持
-          # 这里要注意路径，根据你之前的截图，configs 在 arch/arm64/configs/vendor 下
           DEFCONFIG="arch/arm64/configs/defconfig"
           echo "CONFIG_KSU_LKM=y" >> $DEFCONFIG
           echo "CONFIG_MODULES=y" >> $DEFCONFIG
@@ -73,7 +71,7 @@ jobs:
           export CLANG_TRIPLE=aarch64-linux-gnu-
           
           # 生成配置
-          make vendor/sm6375_defconfig
+          make arch/arm64/configs/defconfig
           
           # 开始编译模块
           # 如果报错提示缺少某些头文件，尝试执行：make modules_prepare
