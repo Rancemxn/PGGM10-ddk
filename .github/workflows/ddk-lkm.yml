@@ -27,8 +27,8 @@ jobs:
           # 修复 sched_assist 报错
           sed -i '/kernel\/sched_assist\/Kconfig/d' init/Kconfig
           # 预防性修复：有些欧加源码还缺 techpack 或其他目录，如果报错可以继续添加
-          # sed -i '/techpack/d' Makefile
-          # sed -i '/techpack/d' arch/arm64/Kconfig
+          sed -i '/techpack/d' Makefile
+          sed -i '/techpack/d' arch/arm64/Kconfig
           
           echo "Source tree repaired."
 
