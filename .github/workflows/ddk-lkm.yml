@@ -1,4 +1,4 @@
-name: Build KernelSU LKM for OPPO K10x
+name: Build KernelSU LKM for OPPO K10x (Final Boss Fix)
 
 on:
   workflow_dispatch:
@@ -15,71 +15,82 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev clang lld llvm-dev crossbuild-essential-arm64
 
-      - name: Sync OPPO Kernel Source
+      - name: Build KernelSU LKM
         run: |
-          # 依然克隆你找的这个分支
+          # 1. 克隆源码
           git clone --depth=1 -b oppo/sm6375_u_14.0.0_k10x_5g https://github.com/oppo-source/android_kernel_oppo_sm6375.git kernel-source
-
-      - name: Repair Kernel Source (Nuclear Option)
-        run: |
           cd kernel-source
-          
-          # 1. 彻底解决 'unsupported character' 报错 (换行符转换)
-          # 将全仓库的 Kconfig 和 Makefile 的 \r\n 换成 \n
-          echo "Converting line endings..."
-          find . -type f \( -name "Kconfig*" -o -name "Makefile" -o -name "*.mk" \) -exec sed -i 's/\r$//' {} +
 
-          # 2. 全递归修复 Kconfig 引用
-          # 不再硬编码路径，直接扫描整个源码树所有的 Kconfig 文件
-          echo "Recursively auto-fixing ALL Kconfig files..."
+          # 2. 核弹级源码修复 (针对欧加套娃源码)
+          echo "Repairing Source Tree..."
+          # 转换换行符
+          find . -type f \( -name "Kconfig*" -o -name "Makefile" -o -name "*.mk" \) -exec sed -i 's/\r$//' {} +
+          # 递归删除不存在的 Kconfig 引用
           find . -name "Kconfig*" | while read -r kfile; do
-              # 提取 source "..." 中的路径并检查
               grep -oP 'source "\K[^"]+' "$kfile" | while read -r line; do
-                  # 注意：有些路径可能是相对路径，这里做个简单判断
-                  if [ ! -f "$line" ] && [ ! -f "$(dirname $kfile)/$line" ]; then
-                      echo "  -> In $kfile: Removing broken reference $line"
+                  # 这里的逻辑：如果路径里有 ../，则相对于当前 Kconfig 所在目录查找
+                  target_path="$line"
+                  if [[ "$line" == .* ]]; then
+                      target_path="$(dirname $kfile)/$line"
+                  fi
+                  if [ ! -f "$target_path" ]; then
+                      echo "  -> Removing broken reference: $line in $kfile"
                       sed -i "\|source \"$line\"|d" "$kfile"
                   fi
               done
           done
-
-          # 3. 清理失效的软链接 (Symlinks)
-          echo "Cleaning broken symlinks..."
+          # 清理失效软链接
           find . -type l ! -exec test -e {} \; -delete
-
-          # 4. 彻底屏蔽 techpack (欧加源码重灾区)
+          # 屏蔽 techpack
           sed -i 's/obj-y += techpack\///g' Makefile 2>/dev/null || true
-          
-          echo "Repair complete."
 
-      - name: Setup KernelSU
-        run: |
-          cd kernel-source
+          # 3. 集成 KernelSU
+          echo "Setting up KernelSU..."
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
           
-          DEFCONFIG="arch/arm64/configs/defconfig"
-          echo "CONFIG_KSU_LKM=y" >> $DEFCONFIG
-          echo "CONFIG_MODULES=y" >> $DEFCONFIG
-          echo "CONFIG_MODULE_SIG=n" >> $DEFCONFIG # 关闭签名校验，防止加载失败
+          # 4. 注入配置到正确的 Defconfig (核心修正)
+          # 既然你执行 make vendor/sm6375_defconfig，我们就改这个文件
+          TARGET_CONFIG="arch/arm64/configs/defconfig"
+          echo "CONFIG_KSU_LKM=y" >> $TARGET_CONFIG
+          echo "CONFIG_MODULES=y" >> $TARGET_CONFIG
+          echo "CONFIG_MODULE_SIG=n" >> $TARGET_CONFIG
+          echo "CONFIG_UNUSED_SYMBOLS=y" >> $TARGET_CONFIG # 增加兼容性
 
-      - name: Build LKM
-        run: |
-          cd kernel-source
+          # 5. 开始正式编译
+          echo "Starting Build Process..."
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
           export CC=clang
           export CLANG_TRIPLE=aarch64-linux-gnu-
           
-          # 生成配置
+          # 生成 .config
           make arch/arm64/configs/defconfig
           
-          # 开始编译模块
-          # 如果报错提示缺少某些头文件，尝试执行：make modules_prepare
-          make modules_prepare
+          # 检查 .config 是否真的生成了，如果没有直接报错退出
+          if [ ! -f ".config" ]; then
+              echo "FATAL: .config was not generated! Defconfig step failed."
+              exit 1
+          fi
+
+          # 准备编译环境
+          make modules_prepare -j$(nproc)
+          
+          # 仅编译 KernelSU 模块
+          # 注意：KSU 源码被 setup.sh 放在了 drivers/kernelsu
           make M=drivers/kernelsu -j$(nproc)
+
+          # 6. 检查并准备产物
+          if [ -f "drivers/kernelsu/kernelsu.ko" ]; then
+              echo "SUCCESS: kernelsu.ko built!"
+              cp drivers/kernelsu/kernelsu.ko ../
+          else
+              echo "ERROR: kernelsu.ko not found in drivers/kernelsu/"
+              find drivers -name "*.ko"
+              exit 1
+          fi
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kernelsu-ko
-          path: kernel-source/drivers/kernelsu/kernelsu.ko
+          name: kernelsu-ko-pggm10
+          path: kernelsu.ko
