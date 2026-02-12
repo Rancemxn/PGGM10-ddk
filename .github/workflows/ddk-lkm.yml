@@ -1,0 +1,42 @@
+name: Build KernelSU for OPPO K10x
+
+on:
+  workflow_dispatch: # 允许手动触发
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive  # 必须拉取 KernelSU 子模块
+          fetch-depth: 0
+
+      - name: Setup KernelSU (Fallback)
+        run: |
+          # 双重保险：如果没有拉取到子模块，手动克隆
+          if [ ! -d "KernelSU/kernel" ]; then
+             echo "Cloning KernelSU..."
+             git clone https://github.com/tiann/KernelSU.git
+             # 移动目录结构以匹配 Makefile
+             # 注意：如果上面 git clone 直接生成了 KernelSU 文件夹，这里就不用动了
+          fi
+
+      - name: Build with DDK
+        uses: addnab/docker-run-action@v3
+        with:
+          # 你的内核是 5.4，必须用这个标签
+          image: ghcr.io/ylarod/ddk:android12-5.4
+          options: -v ${{ github.workspace }}:/build --privileged
+          run: |
+            cd /build
+            echo "Starting Build..."
+            # 使用 DDK 进行编译
+            ddk build --target android12-5.4
+            
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernelsu-k10x
+          path: kernelsu.ko
