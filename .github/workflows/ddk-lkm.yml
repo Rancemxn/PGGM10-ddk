@@ -5,7 +5,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -13,11 +13,10 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          # 移除了找不到的旧软件包，换成了新版通用的 libncurses-dev
-          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib \
-            gcc-multilib git git-lfs gnupg gperf libelf-dev libncurses-dev \
-            libssl-dev libxml2 libxml2-utils lzop pngcrush rsync \
-            schedtool squashfs-tools xsltproc zip zlib1g-dev \
+          # 精简后的依赖列表，移除有冲突的旧包，确保 22.04 必中
+          sudo apt-get install -y bc bison build-essential curl flex git git-lfs \
+            gnupg gperf libelf-dev libncurses-dev libssl-dev libxml2-utils \
+            lzop rsync schedtool squashfs-tools xsltproc zip zlib1g-dev \
             gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
 
       - name: Setup Clang 12 (Stable Version)
