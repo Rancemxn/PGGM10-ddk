@@ -31,68 +31,90 @@ jobs:
 
       - name: Build KernelSU LKM
         run: |
-          # 1. 克隆源码
-          git clone --depth=1 -b oppo/sm6375_u_14.0.0_k10x_5g https://github.com/oppo-source/android_kernel_oppo_sm6375.git kernel-source
-          cd kernel-source
+            # 1. 克隆源码
+            git clone --depth=1 -b oppo/sm6375_u_14.0.0_k10x_5g https://github.com/oppo-source/android_kernel_oppo_sm6375.git kernel-source
+            cd kernel-source
 
-          # 2. 源码修复 (OPPO 特色修复)
-          echo "Repairing Source Tree..."
-          find . -type f \( -name "Kconfig*" -o -name "Makefile" -o -name "*.mk" \) -exec sed -i 's/\r$//' {} +
-          sed -i 's/obj-y += techpack\///g' Makefile 2>/dev/null || true
+            # 2. 源码深度修复 (针对 OPPO 遗留的引用错误)
+            echo "Repairing Source Tree..."
+            
+            # A. 转换换行符
+            find . -type f \( -name "Kconfig*" -o -name "Makefile" -o -name "*.mk" \) -exec sed -i 's/\r$//' {} +
+            
+            # B. 核心修复：查找并删除所有不存在的 Kconfig 引用
+            # 我们遍历所有的 Kconfig 文件，检查里面 source 指向的文件是否存在，如果不存在就删除整行
+            find . -name "Kconfig*" | while read -r kfile; do
+                # 提取所有 source "..." 里的路径
+                lines=$(grep -oP 'source "\K[^"]+' "$kfile")
+                for line in $lines; do
+                    # 转换为相对于内核根目录的路径
+                    if [[ "$line" == /* ]]; then
+                        target_path=".$line"
+                    elif [[ "$line" == .* ]]; then
+                        target_path="$(dirname "$kfile")/$line"
+                    else
+                        target_path="$line"
+                    fi
+                    
+                    # 如果目标文件不存在，直接从 Kconfig 中删掉这一行
+                    if [ ! -f "$target_path" ]; then
+                        echo "Removing broken reference in $kfile: $line"
+                        sed -i "\|source \"$line\"|d" "$kfile"
+                    fi
+                done
+            done
 
-          # 3. 集成 KernelSU
-          echo "Setting up KernelSU..."
-          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
-          
-          # 4. 设置编译参数 (参考教程 build.sh 逻辑)
-          export PATH=${{ env.CLANG_PATH }}/bin:$PATH
-          
-          # 教程建议的参数组合
-          ARGS="ARCH=arm64 \
-          SUBARCH=arm64 \
-          CC=clang \
-          CROSS_COMPILE=aarch64-linux-gnu- \
-          CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-          CLANG_TRIPLE=aarch64-linux-gnu- \
-          LLVM=1 \
-          LLVM_IAS=1"
+            # C. 屏蔽 techpack 和其他可能缺失的目录
+            sed -i 's/obj-y += techpack\///g' Makefile 2>/dev/null || true
+            # 清理失效链接
+            find . -type l ! -exec test -e {} \; -delete
 
-          # 5. 生成配置
-          echo "Generating Defconfig..."
-          # 拼接 GKI 和 厂商配置
-          cat arch/arm64/configs/gki_defconfig arch/arm64/configs/vendor/holi_GKI.config > arch/arm64/configs/k10x_defconfig
-          
-          # 第一次构建配置
-          make $ARGS k10x_defconfig
-          
-          # 注入 KernelSU LKM 配置
-          echo "CONFIG_KSU_LKM=y" >> .config
-          echo "CONFIG_MODULES=y" >> .config
-          echo "CONFIG_MODULE_SIG=n" >> .config
-          echo "CONFIG_UNUSED_SYMBOLS=y" >> .config
-          
-          # 处理依赖
-          make $ARGS olddefconfig
+            # 3. 集成 KernelSU
+            echo "Setting up KernelSU..."
+            curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+            
+            # 4. 定义编译参数
+            export PATH=${{ env.CLANG_PATH }}/bin:$PATH
+            ARGS="ARCH=arm64 \
+            SUBARCH=arm64 \
+            CC=clang \
+            LD=ld.lld \
+            AR=llvm-ar \
+            NM=llvm-nm \
+            OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump \
+            STRIP=llvm-strip \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            LLVM=1 \
+            LLVM_IAS=1"
 
-          # 6. 执行编译 (教程建议分步执行)
-          echo "Preparing Kernel for LKM..."
-          # 先准备环境，不使用 -j 防止报错被淹没
-          make $ARGS prepare
-          
-          echo "Compiling KernelSU Module..."
-          # 正式多线程编译模块
-          make $ARGS M=drivers/kernelsu -j$(nproc)
+            # 5. 生成配置
+            echo "Generating Defconfig..."
+            cat arch/arm64/configs/gki_defconfig arch/arm64/configs/vendor/holi_GKI.config > arch/arm64/configs/k10x_defconfig
+            make $ARGS k10x_defconfig
+            
+            echo "CONFIG_KSU_LKM=y" >> .config
+            echo "CONFIG_MODULES=y" >> .config
+            echo "CONFIG_MODULE_SIG=n" >> .config
+            echo "CONFIG_UNUSED_SYMBOLS=y" >> .config
+            
+            make $ARGS olddefconfig
 
-          # 7. 产物检查
-          if [ -f "drivers/kernelsu/kernelsu.ko" ]; then
-              echo "SUCCESS!"
-              cp drivers/kernelsu/kernelsu.ko ../
-          else
-              echo "FAILED: kernelsu.ko not found!"
-              # 打印最后 100 行日志辅助分析
-              tail -n 100 ../kernel_log.log || true
-              exit 1
-          fi
+            # 6. 编译
+            echo "Starting build..."
+            make $ARGS prepare -j$(nproc)
+            make $ARGS M=drivers/kernelsu -j$(nproc)
+
+            # 7. 检查
+            if [ -f "drivers/kernelsu/kernelsu.ko" ]; then
+                echo "SUCCESS!"
+                cp drivers/kernelsu/kernelsu.ko ../
+            else
+                echo "ERROR: kernelsu.ko not found!"
+                exit 1
+            fi
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
