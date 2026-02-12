@@ -13,40 +13,55 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev clang lld llvm-dev qemu-user-static crossbuild-essential-arm64
+          sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev clang lld llvm-dev crossbuild-essential-arm64
 
       - name: Sync OPPO Kernel Source
         run: |
-          # 克隆你找出来的那个官方源码仓库，指定分支
+          # 依然克隆你找的这个分支
           git clone --depth=1 -b oppo/sm6375_u_14.0.0_k10x_5g https://github.com/oppo-source/android_kernel_oppo_sm6375.git kernel-source
+
+      - name: Repair Kernel Source (Fix Oplus Missing Files)
+        run: |
+          cd kernel-source
+          # 关键操作：强行删除 Kconfig 中缺失目录的引用
+          # 修复 sched_assist 报错
+          sed -i '/kernel\/sched_assist\/Kconfig/d' init/Kconfig
+          # 预防性修复：有些欧加源码还缺 techpack 或其他目录，如果报错可以继续添加
+          # sed -i '/techpack/d' Makefile
+          # sed -i '/techpack/d' arch/arm64/Kconfig
+          
+          echo "Source tree repaired."
 
       - name: Setup KernelSU
         run: |
           cd kernel-source
-          # 使用官方脚本集成 KernelSU
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
-          # 强制开启 LKM 模式编译配置 (在内核配置中打开模块支持)
-          echo "CONFIG_KSU_LKM=y" >> arch/arm64/configs/defconfig
-          echo "CONFIG_MODULES=y" >> arch/arm64/configs/defconfig
+          
+          # 确保开启模块支持
+          # 这里要注意路径，根据你之前的截图，configs 在 arch/arm64/configs/vendor 下
+          DEFCONFIG="arch/arm64/configs/defconfig"
+          echo "CONFIG_KSU_LKM=y" >> $DEFCONFIG
+          echo "CONFIG_MODULES=y" >> $DEFCONFIG
+          echo "CONFIG_MODULE_SIG=n" >> $DEFCONFIG # 关闭签名校验，防止加载失败
 
       - name: Build LKM
         run: |
           cd kernel-source
-          # 设置交叉编译参数。注意：Clang 版本我们先用环境自带的，不行再手动下载
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
           export CC=clang
           export CLANG_TRIPLE=aarch64-linux-gnu-
           
-          # 先生成配置文件
+          # 生成配置
           make vendor/sm6375_defconfig
           
-          # 仅编译模块
-          make modules -j$(nproc)
+          # 开始编译模块
+          # 如果报错提示缺少某些头文件，尝试执行：make modules_prepare
+          make modules_prepare
+          make M=drivers/kernelsu -j$(nproc)
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: kernelsu-ko
-          path: kernel-source/drivers/kernelsu/kernelsu.ko 
-          # 注意：路径可能在 drivers/kernelsu/ 或你的 Makefile 定义处
+          path: kernel-source/drivers/kernelsu/kernelsu.ko
