@@ -14,14 +14,14 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential curl flex g++-multilib gcc-multilib git gnupg gperf lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libssl-dev libxml2 libxml2-utils lzop rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python3
+          sudo apt-get install -y bc bison build-essential curl flex g++-multilib gcc-multilib git gnupg gperf lib32z1-dev liblz4-tool libncurses5-dev libssl-dev libxml2 libxml2-utils lzop rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python3
           sudo apt install -y git ccache automake flex lzop bison gperf build-essential zip curl zlib1g-dev g++-multilib \
             libxml2-utils bzip2 libbz2-dev libbz2-1.0 libghc-bzlib-dev squashfs-tools pngcrush schedtool dpkg-dev make \
             optipng maven libssl-dev pwgen libswitch-perl policycoreutils minicom libxml-sax-base-perl libxml-simple-perl \
             bc python2 libc6-dev-i386 libx11-dev lib32z-dev libgl1-mesa-dev xsltproc unzip device-tree-compiler python3 \
             zstd libc6 binutils libc6-dev-i386 gcc g++ p7zip p7zip-full gedit gedit-plugins gir1.2-peas-1.0 gir1.2-peasgtk-1.0
           sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git git-lfs gnupg gperf imagemagick
-            lib32readline-dev lib32z1-dev libelf-dev liblz4-tool libncurses5 libncurses5-dev
+            lib32z1-dev libelf-dev liblz4-tool libncurses5 libncurses5-dev
             libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync
             schedtool squashfs-tools xsltproc
             zip zlib1g-dev
