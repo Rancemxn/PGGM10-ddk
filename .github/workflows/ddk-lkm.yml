@@ -1,42 +1,52 @@
-name: Build KernelSU for OPPO K10x
+name: Build KernelSU LKM for OPPO K10x
 
 on:
-  workflow_dispatch: # 允许手动触发
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          submodules: recursive  # 必须拉取 KernelSU 子模块
-          fetch-depth: 0
 
-      - name: Setup KernelSU (Fallback)
+      - name: Install Dependencies
         run: |
-          # 双重保险：如果没有拉取到子模块，手动克隆
-          if [ ! -d "KernelSU/kernel" ]; then
-             echo "Cloning KernelSU..."
-             git clone https://github.com/tiann/KernelSU.git
-             # 移动目录结构以匹配 Makefile
-             # 注意：如果上面 git clone 直接生成了 KernelSU 文件夹，这里就不用动了
-          fi
+          sudo apt-get update
+          sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev clang lld llvm-dev qemu-user-static crossbuild-essential-arm64
 
-      - name: Build with DDK
-        uses: addnab/docker-run-action@v3
-        with:
-          # 你的内核是 5.4，必须用这个标签
-          image: ghcr.io/ylarod/ddk:android12-5.4
-          options: -v ${{ github.workspace }}:/build --privileged
-          run: |
-            cd /build
-            echo "Starting Build..."
-            # 使用 DDK 进行编译
-            ddk build --target android12-5.4
-            
+      - name: Sync OPPO Kernel Source
+        run: |
+          # 克隆你找出来的那个官方源码仓库，指定分支
+          git clone --depth=1 -b oppo/sm6375_u_14.0.0_k10x_5g https://github.com/oppo-source/android_kernel_oppo_sm6375.git kernel-source
+
+      - name: Setup KernelSU
+        run: |
+          cd kernel-source
+          # 使用官方脚本集成 KernelSU
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+          # 强制开启 LKM 模式编译配置 (在内核配置中打开模块支持)
+          echo "CONFIG_KSU_LKM=y" >> arch/arm64/configs/defconfig
+          echo "CONFIG_MODULES=y" >> arch/arm64/configs/defconfig
+
+      - name: Build LKM
+        run: |
+          cd kernel-source
+          # 设置交叉编译参数。注意：Clang 版本我们先用环境自带的，不行再手动下载
+          export ARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CC=clang
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          
+          # 先生成配置文件
+          make vendor/sm6375_defconfig
+          
+          # 仅编译模块
+          make modules -j$(nproc)
+
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kernelsu-k10x
-          path: kernelsu.ko
+          name: kernelsu-ko
+          path: kernel-source/drivers/kernelsu/kernelsu.ko 
+          # 注意：路径可能在 drivers/kernelsu/ 或你的 Makefile 定义处
